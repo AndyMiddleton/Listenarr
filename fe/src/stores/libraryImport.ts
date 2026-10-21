@@ -155,12 +155,27 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
 
   // ─── Scan ─────────────────────────────────────────────────────────────────
 
+  // Only the latest load or scan may write the state: starting one stops listening to the previous
+  // scan, and an older one answering late is ignored
+  let currentOperation = 0
+  let stopCurrentScan: (() => void) | null = null
+
+  function _beginOperation(folderId: number): number {
+    stopCurrentScan?.()
+    stopCurrentScan = null
+    // Start Matching works on the rows shown: another folder's rows replace them, so it stops
+    if (folderId !== rootFolderId.value) stopProcessing()
+    return ++currentOperation
+  }
+
   async function initFromRootFolder(id: number) {
+    const operation = _beginOperation(id)
     rootFolderId.value = id
     scanStatus.value = 'idle'
     scanWarnings.value = []
     try {
       const saved = await apiService.getSavedUnmatchedFiles(id)
+      if (operation !== currentOperation) return
       if (saved.lastScannedAt) lastScannedAt.value = saved.lastScannedAt
       scanWarnings.value = saved.warnings ?? []
       const persisted = _loadPersistedMatches(id)
@@ -196,15 +211,21 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
   }
 
   async function triggerScan(id: number) {
+    const operation = _beginOperation(id)
+    const isCurrent = () => operation === currentOperation
+    // Matches already made in this folder carry over to the new results, even when it wasn't loaded
+    const persisted = _loadPersistedMatches(id)
+    if (rootFolderId.value !== id) {
+      // Another folder's rows must not show under this one, even if the scan fails
+      items.value = {}
+      lastScannedAt.value = null
+    }
     rootFolderId.value = id
     scanStatus.value = 'scanning'
     scanError.value = null
     scanWarnings.value = []
-    try {
-      localStorage.removeItem(_storageKey(id))
-    } catch {
-      /* non-fatal */
-    }
+    // The saved matches stay until this scan's results replace them: a scan that replaces this one
+    // reads them again
 
     let jobId = ''
     let settled = false
@@ -219,25 +240,29 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
       }
     }
 
+    stopCurrentScan = cleanUp
+
     async function onComplete(completedJobId: string) {
-      if (settled) return
+      if (settled || !isCurrent()) return
       settled = true
       cleanUp()
       try {
         const response = await apiService.getUnmatchedResults(completedJobId)
-        _populateFromItems(response.items)
+        if (!isCurrent()) return
+        _populateFromItems(response.items, persisted)
         scanWarnings.value = response.warnings ?? []
         _persistMatches()
         lastScannedAt.value = new Date().toISOString()
         scanStatus.value = 'done'
       } catch (e) {
+        if (!isCurrent()) return
         scanStatus.value = 'error'
         scanError.value = (e as Error)?.message ?? 'Failed to fetch results'
       }
     }
 
     function onFailed(error?: string) {
-      if (settled) return
+      if (settled || !isCurrent()) return
       settled = true
       cleanUp()
       scanStatus.value = 'error'
@@ -258,9 +283,10 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
     try {
       const result = await apiService.scanUnmatchedFiles(id)
       jobId = result.jobId
-      if (settled) return // SignalR already handled it before this line
+      if (settled || !isCurrent()) return // SignalR already handled it, or another scan replaced it
       // Poll once immediately — handles fast scans
       const check = await apiService.getUnmatchedResults(jobId)
+      if (!isCurrent()) return
       if (check.status === 'Completed') {
         await onComplete(jobId)
       } else if (check.status === 'Failed') {
@@ -283,10 +309,13 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
     }
   }
 
-  function _populateFromItems(scanItems: UnmatchedFileItem[]) {
+  function _populateFromItems(
+    scanItems: UnmatchedFileItem[],
+    persisted: Record<string, PersistedEntry> = {},
+  ) {
     const newItems: Record<string, LibraryImportItem> = {}
     for (const item of scanItems) {
-      const existing = items.value[item.fullPath]
+      const existing = items.value[item.fullPath] ?? persisted[item.fullPath]
       const fresh = unmatchedToImportItem(item)
       newItems[item.fullPath] = existing
         ? {
@@ -341,6 +370,9 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
 
   // ─── Queue Processing ─────────────────────────────────────────────────────
 
+  // Only the latest Start Matching run may go on: a stopped one ends after its search in flight
+  let currentMatchingRun = 0
+
   function startProcessing() {
     const unsearched = itemList.value.filter((i) => !i.hasSearched).map((i) => i.id)
     if (unsearched.length === 0) return
@@ -351,6 +383,7 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
   }
 
   function stopProcessing() {
+    currentMatchingRun++
     lookupQueue.value = []
     isProcessing.value = false
     // Clear any in-flight isSearching flags
@@ -363,7 +396,8 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
   }
 
   async function processNext() {
-    while (isProcessing.value && lookupQueue.value.length > 0) {
+    const run = ++currentMatchingRun
+    while (run === currentMatchingRun && isProcessing.value && lookupQueue.value.length > 0) {
       const id: string = lookupQueue.value[0]!
       lookupQueue.value = lookupQueue.value.slice(1)
 
@@ -379,7 +413,9 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
         metadataFetchCount.value++
         // ASIN results are authoritative — take the first result directly without author comparison
         const first = byAsin ? (results[0] ?? null) : pickBestMatch(results, item.detectedAuthor)
-        const current = items.value[id]!
+        // The row may have left the page meanwhile (another folder loaded or scanned)
+        const current = items.value[id]
+        if (!current) continue
         items.value = {
           ...items.value,
           [id]: {
@@ -400,7 +436,7 @@ export const useLibraryImportStore = defineStore('libraryImport', () => {
           }
       }
     }
-    isProcessing.value = false
+    if (run === currentMatchingRun) isProcessing.value = false
   }
 
   // ─── Per-row manual search ────────────────────────────────────────────────
