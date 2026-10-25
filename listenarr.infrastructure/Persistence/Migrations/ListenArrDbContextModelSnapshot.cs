@@ -294,6 +294,9 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.Property<int?>("QualityProfileId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("RequiredNarrator")
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("Runtime")
                         .HasColumnType("INTEGER");
 
@@ -1809,6 +1812,12 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("AllowedFileExtensions")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AudiobookshelfApiKey")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AudiobookshelfBaseUrl")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("AudnexusApiUrl")

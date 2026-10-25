@@ -484,6 +484,8 @@ export interface ApplicationSettings {
   // Search behavior settings
   // Enable OpenLibrary augmentation/search
   enableOpenLibrarySearch?: boolean
+  audiobookshelfBaseUrl?: string
+  audiobookshelfApiKey?: string
   defaultSearchRegion?: string
   defaultSearchLanguage?: string
 }
@@ -753,6 +755,7 @@ export interface Audiobook {
   runtime?: number
   edition?: string
   version?: string
+  requiredNarrator?: string
   imageUrl?: string
   explicit?: boolean
   abridged?: boolean
@@ -808,6 +811,7 @@ export interface AudiobookUpdateRequest {
   runtime?: number
   edition?: string
   version?: string
+  requiredNarrator?: string
   explicit?: boolean
   abridged?: boolean
   monitored?: boolean
