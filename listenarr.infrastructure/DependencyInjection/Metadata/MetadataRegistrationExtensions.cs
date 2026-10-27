@@ -36,6 +36,10 @@ internal static class MetadataRegistrationExtensions
         services.AddHttpClient<IAudiobookshelfService, AudiobookshelfService>()
             .ConfigurePrimaryHttpMessageHandler(PlatformRegistrationExtensions.CreateExternalHandler)
             .AddPolicyHandler(retryPolicy);
+        // Community edition catalogue: finds recordings Audible's search no longer lists.
+        services.AddHttpClient<IAudiosiloMetaService, AudiosiloMetaService>(client => client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(PlatformRegistrationExtensions.CreateExternalHandler)
+            .AddPolicyHandler(retryPolicy);
         return services;
     }
 
